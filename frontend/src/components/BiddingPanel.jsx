@@ -1,22 +1,37 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 
 const SUITS = [
-  { name: "hearts", symbol: "♥", color: "#d32f2f" },
-  { name: "diamonds", symbol: "♦", color: "#d32f2f" },
   { name: "clubs", symbol: "♣", color: "#1a1a1a" },
+  { name: "diamonds", symbol: "♦", color: "#d32f2f" },
+  { name: "hearts", symbol: "♥", color: "#d32f2f" },
   { name: "spades", symbol: "♠", color: "#1a1a1a" },
 ];
+const SUIT_ORDER = SUITS.map((suit) => suit.name);
 
 export default function BiddingPanel({ state, send, isMyTurn }) {
-  const [bidValue, setBidValue] = useState(5);
+  const [bidValue, setBidValue] = useState(4);
   const [suit, setSuit] = useState(null);
 
-  const minBid = Math.max(5, state.bid + 1);
-  const maxBid = 8; // TOTAL_TRICKS
+  const regularBids = [4, 5, 6, 7].filter((value) => value >= Math.max(4, state.bid));
+
+  useEffect(() => {
+    if (state.bid <= 7) setBidValue(Math.max(4, state.bid));
+  }, [state.bid]);
+
+  function canBeatCurrent(value) {
+    if (!suit) return false;
+    return value > state.bid || (value === state.bid && SUIT_ORDER.indexOf(suit) > SUIT_ORDER.indexOf(state.bidSuit));
+  }
 
   function submitBid() {
-    if (!suit) return;
+    if (!canBeatCurrent(bidValue)) return;
     send({ type: "bid", bid: bidValue, suit });
+    setSuit(null);
+  }
+
+  function callChakri() {
+    if (!canBeatCurrent(8)) return;
+    send({ type: "bid", bid: 8, suit, chakri: true });
     setSuit(null);
   }
 
@@ -52,7 +67,7 @@ export default function BiddingPanel({ state, send, isMyTurn }) {
       <div style={{ fontSize: "0.85rem", color: "var(--text-dim)", textAlign: "center" }}>
         {state.bid > 0 ? (
           <>
-            Current bid: <b style={{ color: "var(--gold)" }}>{state.bid}</b> tricks of{" "}
+            Current bid: <b style={{ color: "var(--gold)" }}>{state.bid === 8 ? "CHAKRI" : state.bid}</b>{state.bid === 8 ? " " : " hands of "}
             <span style={{
               color: state.bidSuit === "hearts" || state.bidSuit === "diamonds" ? "#d32f2f" : "#fff",
               fontSize: "1.1rem",
@@ -90,7 +105,7 @@ export default function BiddingPanel({ state, send, isMyTurn }) {
                 "pass"
               ) : (
                 <>
-                  {b.bid}
+                  {b.bid === 8 ? "CHAKRI " : b.bid}
                   <span style={{
                     color: b.suit === "hearts" || b.suit === "diamonds" ? "#d32f2f" : "#fff",
                   }}>
@@ -146,30 +161,43 @@ export default function BiddingPanel({ state, send, isMyTurn }) {
                   fontSize: "0.9rem",
                 }}
               >
-                {Array.from({ length: maxBid - minBid + 1 }, (_, i) => minBid + i).map(
-                  (n) => (
-                    <option key={n} value={n}>
-                      {n}
-                    </option>
-                  )
-                )}
+                {regularBids.map((n) => (
+                  <option key={n} value={n}>{n}</option>
+                ))}
               </select>
             </div>
             <button
               onClick={submitBid}
-              disabled={!suit}
+              disabled={!canBeatCurrent(bidValue) || regularBids.length === 0}
               style={{
                 padding: "8px 20px",
                 borderRadius: "6px",
                 border: "none",
                 fontWeight: "bold",
-                cursor: suit ? "pointer" : "not-allowed",
-                background: suit ? "var(--gold)" : "#555",
-                color: suit ? "#333" : "#999",
-                opacity: suit ? 1 : 0.5,
+                cursor: canBeatCurrent(bidValue) && regularBids.length ? "pointer" : "not-allowed",
+                background: canBeatCurrent(bidValue) && regularBids.length ? "var(--gold)" : "#555",
+                color: canBeatCurrent(bidValue) && regularBids.length ? "#333" : "#999",
+                opacity: canBeatCurrent(bidValue) && regularBids.length ? 1 : 0.5,
               }}
             >
               Bid {bidValue} {suit && ({ hearts: "♥", diamonds: "♦", clubs: "♣", spades: "♠" })[suit]}
+            </button>
+            <button
+              onClick={callChakri}
+              disabled={!canBeatCurrent(8)}
+              title="Declare that your team will win all eight hands"
+              style={{
+                padding: "8px 14px",
+                borderRadius: "6px",
+                border: "2px solid var(--gold)",
+                fontWeight: "bold",
+                cursor: canBeatCurrent(8) ? "pointer" : "not-allowed",
+                background: canBeatCurrent(8) ? "#6d4aff" : "#444",
+                color: "white",
+                opacity: canBeatCurrent(8) ? 1 : 0.5,
+              }}
+            >
+              ★ Chakri
             </button>
             <button
               onClick={pass}

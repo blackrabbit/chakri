@@ -52,7 +52,7 @@ export default function TrumpSelector({ state, send, isMyTurn }) {
         Choose Trump Suit
       </h3>
       <p style={{ fontSize: "0.8rem", color: "var(--text-dim)" }}>
-        You won the bid with {state.bid} tricks.
+        You won the bid with {state.bid} hands.
       </p>
       <div style={{ display: "flex", gap: "16px" }}>
         {SUITS.map((s) => (

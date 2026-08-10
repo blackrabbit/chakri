@@ -1,172 +1,32 @@
-import React, { useState, useEffect, useRef } from "react";
-import { createBots, closeBots } from "../bots.js";
+import React from "react";
 
 export default function Lobby({ state, send, yourName, roomId }) {
-  const [bots, setBots] = useState(null);
-  const botsRef = useRef(null);
   const players = state?.players || [];
   const seats = Array.from({ length: 6 }, (_, i) => players[i] || null);
+  const me = players[state?.yourIndex];
+  const canAddBots = players.length > 0 && players.length < 6 && (me?.id === state?.ownerId || yourName === "blackrabbit");
+  const canManageBots = yourName === "blackrabbit";
 
-  return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        justifyContent: "center",
-        height: "100vh",
-        gap: "24px",
-        background: "radial-gradient(ellipse at center, var(--felt) 0%, var(--felt-dark) 70%)",
-      }}
-    >
-      <h2 style={{ color: "var(--gold)", fontSize: "2rem" }}>
-        Waiting Room
-      </h2>
-      <p style={{ color: "var(--text-dim)" }}>{state?.message || "Connecting..."}</p>
-
-      {/* Seats */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(3, 1fr)",
-          gap: "16px",
-        }}
-      >
-        {seats.map((p, i) => (
-          <div
-            key={i}
-            style={{
-              width: "140px",
-              height: "100px",
-              borderRadius: "12px",
-              border: `2px dashed ${p ? "transparent" : "rgba(255,255,255,0.2)"}`,
-              background: p
-                ? `linear-gradient(135deg, ${
-                    p.team === 0 ? "rgba(74,144,217,0.3)" : "rgba(224,101,74,0.3)"
-                  }, rgba(0,0,0,0.2))`
-                : "rgba(0,0,0,0.2)",
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: "4px",
-            }}
-          >
-            {p ? (
-              <>
-                <div
-                  style={{
-                    width: "40px",
-                    height: "40px",
-                    borderRadius: "50%",
-                    background: p.team === 0 ? "var(--team-a)" : "var(--team-b)",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    fontWeight: "bold",
-                    fontSize: "1.2rem",
-                  }}
-                >
-                  {p.name[0]?.toUpperCase()}
-                </div>
-                <span style={{ fontSize: "0.9rem" }}>{p.name}</span>
-                <span style={{ fontSize: "0.7rem", color: "var(--text-dim)" }}>
-                  Team {p.team === 0 ? "A" : "B"}
-                </span>
-                {!p.connected && (
-                  <span style={{ fontSize: "0.65rem", color: "#f87171" }}>
-                    disconnected
-                  </span>
-                )}
-              </>
-            ) : (
-              <span style={{ color: "var(--text-dim)", fontSize: "0.9rem" }}>
-                Empty Seat
-              </span>
-            )}
-          </div>
-        ))}
+  return <div className="lobby-page">
+    <div className="lobby-card">
+      <div className="lobby-header"><div><div className="eyebrow">ROOM {roomId}</div><h1>Waiting room</h1></div><span className="player-count">{players.length} / 6 joined</span></div>
+      <p className="lobby-message">{state?.message || "Connecting to the table…"}</p>
+      <div className="lobby-seats">{seats.map((p, i) => <div className={`lobby-seat ${p ? "filled" : ""}`} key={p?.id || i}>
+        {p ? <>
+          <div className="lobby-avatar" style={{ background: p.team === 0 ? "var(--team-a)" : "var(--team-b)" }}>{p.isBot ? "◆" : p.name[0]?.toUpperCase()}</div>
+          <strong>{p.name}</strong>
+          <small><span className={`team-dot team-${p.team}`} /> Team {p.team === 0 ? "A" : "B"} {p.isBot && <b className="bot-label">· BOT</b>} {p.isAway && <b className="away-tag">· AWAY</b>}</small>
+          {!p.connected && !p.isBot && <small className="offline-label">Disconnected</small>}
+          {i === state?.yourIndex && !p.isBot && <button className={`seat-bot-button ${p.isAway ? "is-away" : ""}`} onClick={() => send({ type: "set_away", isAway: !p.isAway })}>{p.isAway ? "I'm back" : "Mark away"}</button>}
+          {canManageBots && <button className="seat-bot-button" onClick={() => send({ type: "set_bot", playerIndex: i, isBot: !p.isBot })}>{p.isBot && p.id?.startsWith("bot-") ? "Remove bot" : p.isBot ? "Return control" : "Mark as bot"}</button>}
+        </> : <><span className="seat-number">0{i + 1}</span><small>Open seat</small></>}
+      </div>)}</div>
+      <div className="team-legend"><span><i className="team-dot team-0" /> Team A</span><span><i className="team-dot team-1" /> Team B</span></div>
+      <div className="lobby-actions">
+        {players.length === 6 && <button className="primary-action lobby-start" onClick={() => send({ type: "start" })}>Start game <span>▶</span></button>}
+        {canAddBots && <button className="secondary-action bot-button" onClick={() => send({ type: "add_bots" })}>◆ Fill {6 - players.length} open seat{6 - players.length > 1 ? "s" : ""} with bots</button>}
       </div>
-
-      <div style={{ display: "flex", gap: "12px", fontSize: "0.85rem", color: "var(--text-dim)" }}>
-        <span style={{ color: "var(--team-a)" }}>● Team A (seats 1, 3, 5)</span>
-        <span style={{ color: "var(--team-b)" }}>● Team B (seats 2, 4, 6)</span>
-      </div>
-
-      {players.length === 6 && (
-        <button
-          onClick={() => send({ type: "start" })}
-          style={{
-            padding: "16px 48px",
-            borderRadius: "12px",
-            border: "none",
-            fontSize: "1.3rem",
-            fontWeight: "bold",
-            cursor: "pointer",
-            background: "var(--gold)",
-            color: "#333",
-            boxShadow: "0 4px 16px rgba(212,175,55,0.4)",
-          }}
-        >
-          Start Game
-        </button>
-      )}
-
-      {/* Add test bots button — only for room "test" */}
-      {roomId === "test" && players.length > 0 && players.length < 6 && !bots && (
-        <button
-          onClick={() => {
-            const needed = 6 - players.length;
-            const b = createBots(roomId, needed, () => {
-              // small delay then auto-start
-              setTimeout(() => send({ type: "start" }), 1500);
-            });
-            botsRef.current = b;
-            setBots(b);
-          }}
-          style={{
-            padding: "12px 32px",
-            borderRadius: "10px",
-            border: "2px solid var(--gold)",
-            fontSize: "1rem",
-            fontWeight: "bold",
-            cursor: "pointer",
-            background: "rgba(212,175,55,0.15)",
-            color: "var(--gold)",
-          }}
-        >
-          🤖 Add {6 - players.length} Test Bot{6 - players.length > 1 ? "s" : ""}
-        </button>
-      )}
-
-      {bots && (
-        <p style={{ color: "var(--text-dim)", fontSize: "0.85rem" }}>
-          Test bots added — they will auto-play.
-        </p>
-      )}
-
-      {/* Share link */}
-      {players.length > 0 && players.length < 6 && (
-        <div style={{ textAlign: "center" }}>
-          <p style={{ color: "var(--text-dim)", fontSize: "0.85rem", marginBottom: "4px" }}>
-            Share this link to invite players:
-          </p>
-          <code
-            style={{
-              background: "rgba(0,0,0,0.4)",
-              padding: "6px 12px",
-              borderRadius: "6px",
-              color: "var(--gold)",
-              cursor: "pointer",
-            }}
-            onClick={() => {
-              navigator.clipboard?.writeText(window.location.href);
-            }}
-          >
-            {window.location.href}
-          </code>
-        </div>
-      )}
+      {players.length > 0 && players.length < 6 && <div className="invite-box"><small>Share this link to invite players</small><code onClick={() => navigator.clipboard?.writeText(window.location.href)}>{window.location.href}</code></div>}
     </div>
-  );
+  </div>;
 }

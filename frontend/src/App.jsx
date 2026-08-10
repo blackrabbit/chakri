@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import Lobby from "./components/Lobby.jsx";
 import GameTable from "./components/GameTable.jsx";
 import Admin from "./components/Admin.jsx";
+import Auth from "./components/Auth.jsx";
 
 // polyfill for crypto.randomUUID() which is only available in secure contexts (HTTPS)
 function uuid() {
@@ -16,7 +17,7 @@ function uuid() {
 // ---------------------------------------------------------------------------
 // WebSocket game client hook
 // ---------------------------------------------------------------------------
-function useGameSocket(roomId, playerName) {
+function useGameSocket(roomId, playerName, authToken) {
   const [state, setState] = useState(null);
   const [connected, setConnected] = useState(false);
   const wsRef = useRef(null);
@@ -27,12 +28,14 @@ function useGameSocket(roomId, playerName) {
     if (!roomId) return;
 
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const wsUrl = `${proto}//${window.location.host}/api/room/${roomId}?name=${encodeURIComponent(playerName)}&pid=${playerIdRef.current}`;
+    const wsUrl = `${proto}//${window.location.host}/api/room/${roomId}?name=${encodeURIComponent(playerName)}&pid=${playerIdRef.current}${authToken ? `&token=${encodeURIComponent(authToken)}` : ""}`;
 
     let ws;
     let reconnectTimer;
+    let disposed = false;
 
     function connect() {
+      if (disposed) return;
       ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
@@ -43,7 +46,7 @@ function useGameSocket(roomId, playerName) {
       };
       ws.onclose = () => {
         setConnected(false);
-        reconnectTimer = setTimeout(connect, 2000);
+        if (!disposed) reconnectTimer = setTimeout(connect, 2000);
       };
       ws.onerror = () => ws.close();
       ws.onmessage = (e) => {
@@ -61,10 +64,11 @@ function useGameSocket(roomId, playerName) {
 
     connect();
     return () => {
+      disposed = true;
       clearTimeout(reconnectTimer);
       if (ws) ws.close();
     };
-  }, [roomId, playerName]);
+  }, [roomId, playerName, authToken]);
 
   const [errorMsg, setErrorMsg] = useState(null);
 
@@ -81,18 +85,67 @@ function useGameSocket(roomId, playerName) {
 // Main App
 // ---------------------------------------------------------------------------
 export default function App() {
+  const initialRoom = new URLSearchParams(window.location.search).get("room") || "";
+  const savedName = localStorage.getItem("chakri-name") || "";
+  const savedToken = localStorage.getItem("chakri-token") || "";
   const [screen, setScreen] = useState(() => {
     if (window.location.pathname === "/admin") return "admin";
-    return "home";
+    return savedToken ? (initialRoom ? "game" : "home") : "auth";
   });
-  const [roomId, setRoomId] = useState("");
-  const [playerName, setPlayerName] = useState(
-    localStorage.getItem("chakri-name") || ""
-  );
+  const [roomId, setRoomId] = useState(initialRoom);
+  const [playerName, setPlayerName] = useState(savedName);
+  const [authToken, setAuthToken] = useState(savedToken);
+
+  function openRoom(id) {
+    window.history.replaceState({}, "", `/?room=${encodeURIComponent(id)}`);
+  }
+
+  useEffect(() => {
+    if (!authToken || screen === "admin") return;
+    fetch("/api/auth/me", { headers: { Authorization: `Bearer ${authToken}` } })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Session expired");
+        const account = await response.json();
+        setPlayerName(account.username);
+        localStorage.setItem("chakri-name", account.username);
+      })
+      .catch(() => {
+        localStorage.removeItem("chakri-token");
+        localStorage.removeItem("chakri-name");
+        setAuthToken("");
+        setPlayerName("");
+        setRoomId("");
+        setScreen("auth");
+        window.history.replaceState({}, "", "/");
+      });
+  }, [authToken]);
+
+  function leaveRoom() {
+    send({ type: "leave" });
+    setTimeout(() => {
+      setRoomId("");
+      setScreen("home");
+      window.history.replaceState({}, "", "/");
+    }, 100);
+  }
+
+  async function logout() {
+    try {
+      await fetch("/api/auth/logout", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: authToken }) });
+    } catch {}
+    localStorage.removeItem("chakri-token");
+    localStorage.removeItem("chakri-name");
+    setAuthToken("");
+    setPlayerName("");
+    setRoomId("");
+    setScreen("auth");
+    window.history.replaceState({}, "", "/");
+  }
 
   const { state, connected, send, error } = useGameSocket(
     screen === "game" ? roomId : null,
-    playerName
+    playerName,
+    authToken
   );
 
   function createRoom() {
@@ -100,115 +153,38 @@ export default function App() {
     localStorage.setItem("chakri-name", playerName);
     const id = uuid().slice(0, 8);
     setRoomId(id);
+    openRoom(id);
     setScreen("game");
   }
 
   function joinRoom() {
     if (!playerName.trim() || !roomId.trim()) return;
     localStorage.setItem("chakri-name", playerName);
+    openRoom(roomId.trim());
     setScreen("game");
+  }
+
+  if (screen === "auth") {
+    return <Auth onAuthenticated={(data) => { localStorage.setItem("chakri-token", data.token); localStorage.setItem("chakri-name", data.account.name); setAuthToken(data.token); setPlayerName(data.account.name); setScreen("home"); }} />;
   }
 
   if (screen === "home") {
     return (
-      <div
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          justifyContent: "center",
-          height: "100vh",
-          gap: "20px",
-          background: "radial-gradient(ellipse at center, var(--felt) 0%, var(--felt-dark) 70%)",
-        }}
-      >
-        <h1
-          style={{
-            fontSize: "3.5rem",
-            color: "var(--gold)",
-            textShadow: "2px 2px 8px rgba(0,0,0,0.5)",
-            marginBottom: "10px",
-          }}
-        >
-          ♠ Chakri ♥
-        </h1>
-        <p style={{ color: "var(--text-dim)", fontSize: "1.1rem" }}>
-          6-Player Court Piece
-        </p>
-        <div
-          style={{
-            display: "flex",
-            flexDirection: "column",
-            gap: "12px",
-            width: "320px",
-          }}
-        >
-          <input
-            type="text"
-            placeholder="Your name"
-            value={playerName}
-            onChange={(e) => setPlayerName(e.target.value)}
-            maxLength={20}
-            style={{
-              padding: "12px 16px",
-              borderRadius: "8px",
-              border: "none",
-              fontSize: "1rem",
-              background: "rgba(255,255,255,0.95)",
-            }}
-          />
-          <button
-            onClick={createRoom}
-            style={{
-              padding: "14px",
-              borderRadius: "8px",
-              border: "none",
-              fontSize: "1.1rem",
-              fontWeight: "bold",
-              cursor: "pointer",
-              background: "var(--gold)",
-              color: "#333",
-            }}
-          >
-            Create New Room
-          </button>
-          <div
-            style={{
-              display: "flex",
-              gap: "8px",
-            }}
-          >
-            <input
-              type="text"
-              placeholder="Room code"
-              value={roomId}
-              onChange={(e) => setRoomId(e.target.value)}
-              maxLength={8}
-              style={{
-                flex: 1,
-                padding: "12px 16px",
-                borderRadius: "8px",
-                border: "none",
-                fontSize: "1rem",
-                background: "rgba(255,255,255,0.95)",
-              }}
-            />
-            <button
-              onClick={joinRoom}
-              style={{
-                padding: "12px 20px",
-                borderRadius: "8px",
-                border: "none",
-                fontSize: "1rem",
-                fontWeight: "bold",
-                cursor: "pointer",
-                background: "var(--team-a)",
-                color: "white",
-              }}
-            >
-              Join
-            </button>
+      <div className="home-page">
+        <div className="home-toolbar"><div className="account-chip"><span className="account-avatar">{playerName[0]?.toUpperCase()}</span><span>Logged in as <strong>{playerName}</strong></span><button onClick={logout}>Log out</button></div></div>
+        <div className="home-card">
+          <div className="brand-mark">♠</div>
+          <div className="eyebrow">★ ONLINE CARD ARCADE ★</div>
+          <h1>Chakri</h1>
+          <p className="home-subtitle">A modern 6-player Court Piece game.</p>
+          <div className="home-form">
+            <button className="primary-action" onClick={createRoom}>Create new room <span>▶</span></button>
+            <div className="join-row">
+              <input className="modern-input" type="text" placeholder="Room code" value={roomId} onChange={(e) => setRoomId(e.target.value)} maxLength={8} />
+              <button className="secondary-action" onClick={joinRoom}>Join</button>
+            </div>
           </div>
+          <div className="home-footnote">Private rooms · Your PIN keeps your identity across devices</div>
         </div>
       </div>
     );
@@ -237,11 +213,12 @@ export default function App() {
       >
         <div style={{ display: "flex", gap: "16px", alignItems: "center" }}>
           <span
-            onClick={() => setScreen("home")}
+            onClick={leaveRoom}
             style={{ cursor: "pointer", color: "var(--gold)", fontWeight: "bold" }}
           >
             ♠ Chakri
           </span>
+          <button className="leave-room-button" onClick={leaveRoom}>Leave room</button>
           <span style={{ color: "var(--text-dim)" }}>
             Room: <b style={{ color: "var(--gold)" }}>{roomId}</b>
           </span>
@@ -258,10 +235,10 @@ export default function App() {
         {state && (
           <div style={{ display: "flex", gap: "20px", alignItems: "center" }}>
             <span style={{ color: "var(--team-a)" }}>
-              Team A: {state.scores?.[0] ?? 0} ({state.teamTricks?.[0] ?? 0} tricks)
+              Team A: {state.scores?.[0] ?? 0} ({state.teamTricks?.[0] ?? 0} hands)
             </span>
             <span style={{ color: "var(--team-b)" }}>
-              Team B: {state.scores?.[1] ?? 0} ({state.teamTricks?.[1] ?? 0} tricks)
+              Team B: {state.scores?.[1] ?? 0} ({state.teamTricks?.[1] ?? 0} hands)
             </span>
           </div>
         )}

@@ -10,10 +10,10 @@ A 6-player online **Court Piece** (Chakri) card game built with:
 
 - **6 players** in **2 teams of 3** (seating alternates: A-B-A-B-A-B)
 - **48-card deck** (standard 52 minus the four 2s)
-- **8 cards** dealt to each player → **8 tricks** per hand
-- **Bidding phase**: players bid the number of tricks their team will win (5–8). Highest bidder becomes the **trump-caller** and chooses the **trump suit**.
-- **Trick play**: trump-caller leads the first trick. Must follow suit if possible. Highest trump, or highest card of the led suit, wins the trick. Winner leads the next.
-- **Scoring**: trump-caller's team must win at least the bid number of tricks. If they make it, they win the hand. If not, the opposing team wins. Winning all 8 tricks = **baunie** (bonus).
+- **8 cards** dealt to each player → **8 hands** per round
+- **Bidding phase**: players bid the number of hands their team will win (4–7), or call **Chakri** for all 8. Suit rank is clubs, diamonds, hearts, then spades.
+- **Hand play**: trump-caller leads the first hand. Must follow suit if possible. Highest trump, or highest card of the led suit, wins the hand. Winner leads the next.
+- **Scoring**: making a bid earns its value; failing gives opponents double. A +27 spread wins the match, while making Chakri wins immediately.
 - First trump-caller is chosen randomly; the role passes to the next player if the trump-caller's team loses the hand.
 
 ## Project structure
@@ -31,6 +31,14 @@ chakri/
 └── package.json      # root scripts
 ```
 
+## Player accounts
+
+Players can create a lightweight username + PIN account. The account and session
+records live in the `RoomRegistry` Durable Object, so the same player ID works
+across browsers and devices. PINs are intended for casual game identity, not
+sensitive authentication. Local development uses the same Durable Object storage
+through the local celld node; no separate database is required.
+
 ## Development
 
 ```sh
@@ -43,7 +51,7 @@ npm run build
 # Deploy to celld (from project root)
 celld deploy . --bucket "$CELLD_BUCKET" --endpoint "$S3_ENDPOINT" --region "$AWS_REGION"
 
-# Start a celld node
+# Start a celld node (the local node also provides account storage)
 celld --bucket "$CELLD_BUCKET" --endpoint "$S3_ENDPOINT" --region "$AWS_REGION" \
       --listen 0.0.0.0:8080 --advertise <your-vps>:8080
 ```

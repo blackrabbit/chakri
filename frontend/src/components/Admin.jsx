@@ -216,7 +216,7 @@ export default function Admin() {
                   </div>
                   <div style={{ fontSize: "0.8rem", color: "var(--text-dim)" }}>
                     {room.players?.length || 0} players
-                    {room.handNumber > 0 && ` · Hand ${room.handNumber}`}
+                    {room.handNumber > 0 && ` · Round ${room.handNumber}`}
                     {room.scores && ` · Team A: ${room.scores[0]} | Team B: ${room.scores[1]}`}
                   </div>
                   {room.players && room.players.length > 0 && (

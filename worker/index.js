@@ -9,6 +9,8 @@ const RANK_VALUES = Object.fromEntries(RANKS.map((r, i) => [r, RANKS.length - i]
 const NUM_PLAYERS = 6;
 const CARDS_PER_PLAYER = 8;
 const TOTAL_TRICKS = CARDS_PER_PLAYER;
+const BID_SUIT_ORDER = ["clubs", "diamonds", "hearts", "spades"];
+const MATCH_SPREAD = 27;
 
 // ---------------------------------------------------------------------------
 // Deck helpers
@@ -86,6 +88,46 @@ export class RoomRegistry {
   async fetch(request) {
     const url = new URL(request.url);
 
+    // Lightweight account storage for cross-device PIN login.
+    if (url.pathname === "/account/register" && request.method === "POST") {
+      const { username, pin } = await request.json();
+      const key = String(username || "").trim().toLowerCase();
+      const normalizedPin = String(pin || "").trim().toLowerCase();
+      if (!/^[a-z0-9]{3,20}$/.test(key) || !/^[a-z0-9]{4,8}$/.test(normalizedPin)) {
+        return jsonResponse({ error: "Username must be 3–20 and PIN 4–8 lowercase letters or numbers, with no spaces." }, 400);
+      }
+      const accounts = (await this.state.storage.get("accounts")) || {};
+      if (accounts[key]) return jsonResponse({ error: "That username is already taken." }, 409);
+      const salt = crypto.randomUUID();
+      accounts[key] = { id: crypto.randomUUID(), username: key, salt, hash: await hashPin(normalizedPin, salt) };
+      await this.state.storage.put("accounts", accounts);
+      return this.createSession(accounts[key]);
+    }
+
+    if (url.pathname === "/account/login" && request.method === "POST") {
+      const { username, pin } = await request.json();
+      const accounts = (await this.state.storage.get("accounts")) || {};
+      const account = accounts[String(username || "").trim().toLowerCase()];
+      if (!account || account.hash !== await hashPin(String(pin || "").trim().toLowerCase(), account.salt)) return jsonResponse({ error: "Invalid username or PIN." }, 401);
+      return this.createSession(account);
+    }
+
+    if (url.pathname === "/account/verify") {
+      const sessions = (await this.state.storage.get("sessions")) || {};
+      const accountId = sessions[url.searchParams.get("token")];
+      const accounts = (await this.state.storage.get("accounts")) || {};
+      const account = Object.values(accounts).find((item) => item.id === accountId);
+      return account ? jsonResponse({ id: account.id, name: account.username, username: account.username }) : jsonResponse({ error: "Invalid session." }, 401);
+    }
+
+    if (url.pathname === "/account/logout" && request.method === "POST") {
+      const { token } = await request.json();
+      const sessions = (await this.state.storage.get("sessions")) || {};
+      delete sessions[token];
+      await this.state.storage.put("sessions", sessions);
+      return jsonResponse({ ok: true });
+    }
+
     // Register a room
     if (url.pathname === "/register" && request.method === "POST") {
       const { roomId } = await request.json();
@@ -116,6 +158,28 @@ export class RoomRegistry {
 
     return new Response("not found", { status: 404 });
   }
+
+  async createSession(account) {
+    const token = crypto.randomUUID() + crypto.randomUUID();
+    const sessions = (await this.state.storage.get("sessions")) || {};
+    // A player can have only one active login. Signing in elsewhere replaces it.
+    for (const [existingToken, accountId] of Object.entries(sessions)) {
+      if (accountId === account.id) delete sessions[existingToken];
+    }
+    sessions[token] = account.id;
+    await this.state.storage.put("sessions", sessions);
+    return jsonResponse({ token, account: { id: account.id, name: account.username, username: account.username } });
+  }
+}
+
+async function hashPin(pin, salt) {
+  const data = new TextEncoder().encode(`${salt}:${pin}`);
+  const digest = await crypto.subtle.digest("SHA-256", data);
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function jsonResponse(body, status = 200) {
+  return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 }
 
 // ---------------------------------------------------------------------------
@@ -126,6 +190,16 @@ export class GameRoom {
     this.state = state;
     this.env = env;
     this.sessions = new Map(); // playerIndex -> WebSocket
+    // WebSocket sessions do not survive a process restart, so persisted players
+    // must begin disconnected when this Durable Object is activated again.
+    this.ready = this.resetStaleConnections();
+  }
+
+  async resetStaleConnections() {
+    const game = await this.getState();
+    if (!game?.players?.some((player) => player.connected)) return;
+    game.players.forEach((player) => { player.connected = Boolean(player.isBot); });
+    await this.setState(game);
   }
 
   // --- Storage helpers ---
@@ -144,25 +218,43 @@ export class GameRoom {
     const current = game.currentTurn;
     if (current < 0 || current >= game.players.length) return;
     const player = game.players[current];
-    if (player && player.connected) return; // connected — human/bot will act
+    if (player && player.connected && !player.isBot && !player.isAway) return; // active human will act
     // Disconnected — auto-act in ~4s
     await this.state.storage.setAlarm(Date.now() + 4000);
   }
 
   // Fires when a disconnected player's turn needs an automatic action.
   async alarm() {
+    await this.ready;
     const game = await this.getState();
     if (!game) return;
     const current = game.currentTurn;
     if (current < 0 || current >= game.players.length) return;
     const player = game.players[current];
-    if (!player || player.connected) return; // they came back — leave them alone
+    if (!player || (player.connected && !player.isBot && !player.isAway)) return; // active human will act
 
     const fakeWs = { playerIndex: current, send: () => {} };
 
     if (game.phase === "bidding") {
-      // Auto-pass for disconnected bidder
-      await this.handleBid(fakeWs, game, { bid: "pass" });
+      if (player.isBot || player.isAway) {
+        const options = [];
+        for (let bid = 4; bid <= TOTAL_TRICKS; bid++) {
+          for (const suit of BID_SUIT_ORDER) {
+            if (bid > game.bid || (bid === game.bid && BID_SUIT_ORDER.indexOf(suit) > BID_SUIT_ORDER.indexOf(game.bidSuit))) {
+              options.push({ bid, suit });
+            }
+          }
+        }
+        // Bots usually make a modest bid and only rarely call Chakri.
+        const regular = options.filter((option) => option.bid < TOTAL_TRICKS);
+        const shouldPass = game.bid > 0 && Math.random() < 0.4;
+        const pool = regular.length && Math.random() > 0.03 ? regular.slice(0, 4) : options;
+        const choice = pool[Math.floor(Math.random() * pool.length)];
+        await this.handleBid(fakeWs, game, shouldPass || !choice ? { bid: "pass" } : choice);
+      } else {
+        // Auto-pass for a disconnected human bidder.
+        await this.handleBid(fakeWs, game, { bid: "pass" });
+      }
     } else if (game.phase === "playing") {
       const card = randomValidCard(player.hand, game.currentTrick);
       if (card) {
@@ -179,6 +271,7 @@ export class GameRoom {
 
   // --- WebSocket lifecycle ---
   async fetch(request) {
+    await this.ready;
     const url = new URL(request.url);
 
     // Health check
@@ -226,18 +319,28 @@ export class GameRoom {
     const pair = new WebSocketPair();
     const server = pair[0];
 
-    // Parse player info from query string
-    const playerName = url.searchParams.get("name") || "Player";
-    const playerId = url.searchParams.get("pid") || crypto.randomUUID();
+    // Authenticated accounts use their stable account ID across devices.
+    const token = url.searchParams.get("token");
+    let account = null;
+    if (token) {
+      const regId = this.env.ROOM_REGISTRY.idFromName("global");
+      const verify = await this.env.ROOM_REGISTRY.get(regId).fetch(new Request(`https://celld/account/verify?token=${encodeURIComponent(token)}`));
+      if (!verify.ok) return new Response("Invalid session", { status: 401 });
+      account = await verify.json();
+    }
+    const playerName = account?.name || url.searchParams.get("name") || "Player";
+    const playerId = account?.id || url.searchParams.get("pid") || crypto.randomUUID();
 
     server.playerName = playerName;
     server.playerId = playerId;
+    server.accountId = account?.id || null;
 
     this.state.acceptWebSocket(server);
     return new Response(null, { status: 101, webSocket: pair[1] });
   }
 
   async webSocketMessage(ws, msg) {
+    await this.ready;
     let data;
     try {
       data = JSON.parse(msg);
@@ -255,6 +358,18 @@ export class GameRoom {
       case "reconnect":
         await this.handleReconnect(ws, game, data);
         break;
+      case "leave":
+        await this.handleLeave(ws, game);
+        break;
+      case "add_bots":
+        await this.handleAddBots(ws, game);
+        break;
+      case "set_bot":
+        await this.handleSetBot(ws, game, data);
+        break;
+      case "set_away":
+        await this.handleSetAway(ws, game, data);
+        break;
       case "start":
         await this.handleStart(ws, game);
         break;
@@ -270,12 +385,16 @@ export class GameRoom {
       case "next_hand":
         await this.handleNextHand(ws, game);
         break;
+      case "new_match":
+        await this.handleNewMatch(ws, game);
+        break;
       default:
         ws.send(JSON.stringify({ type: "error", message: "unknown action" }));
     }
   }
 
   async webSocketClose(ws) {
+    await this.ready;
     const game = await this.getState();
     if (!game) return;
 
@@ -283,7 +402,7 @@ export class GameRoom {
     for (let i = 0; i < game.players.length; i++) {
       if (this.sessions.get(i) === ws) {
         this.sessions.delete(i);
-        game.players[i].connected = false;
+        game.players[i].connected = Boolean(game.players[i].isBot);
         break;
       }
     }
@@ -318,6 +437,7 @@ export class GameRoom {
         scores: [0, 0],
         lastWinner: -1,
         message: "Waiting for players to join...",
+        ownerId: ws.playerId,
       };
     }
 
@@ -326,6 +446,7 @@ export class GameRoom {
       (p) => p.id === ws.playerId
     );
     if (existingIdx >= 0) {
+      game.players[existingIdx].name = name;
       game.players[existingIdx].connected = true;
       this.sessions.set(existingIdx, ws);
       ws.playerIndex = existingIdx;
@@ -353,6 +474,8 @@ export class GameRoom {
       hand: [],
       tricksWon: 0,
       connected: true,
+      isBot: false,
+      isAway: false,
     });
     this.sessions.set(seatIndex, ws);
     ws.playerIndex = seatIndex;
@@ -368,10 +491,121 @@ export class GameRoom {
     await this.broadcast(game);
   }
 
+  async handleLeave(ws, game) {
+    if (!game || ws.playerIndex === undefined) return;
+    const leavingIndex = ws.playerIndex;
+
+    // During a hand the seat must remain so turn order and cards stay valid.
+    if (game.phase !== "waiting") {
+      game.players[leavingIndex].connected = false;
+      this.sessions.delete(leavingIndex);
+      await this.setState(game);
+      await this.broadcast(game);
+      return;
+    }
+
+    const leavingPlayer = game.players[leavingIndex];
+    game.players.splice(leavingIndex, 1);
+    if (game.ownerId === leavingPlayer.id) {
+      game.ownerId = game.players.find((player) => !player.isBot)?.id || null;
+    }
+    const shiftedSessions = new Map();
+    for (const [index, socket] of this.sessions) {
+      if (socket === ws) continue;
+      const nextIndex = index > leavingIndex ? index - 1 : index;
+      socket.playerIndex = nextIndex;
+      shiftedSessions.set(nextIndex, socket);
+    }
+    this.sessions = shiftedSessions;
+    game.players.forEach((player, index) => {
+      player.seatIndex = index;
+      player.team = index % 2;
+    });
+    game.message = `Waiting for ${NUM_PLAYERS - game.players.length} more player(s)...`;
+    await this.setState(game);
+    await this.broadcast(game);
+  }
+
+  async handleAddBots(ws, game) {
+    if (!game || game.phase !== "waiting") {
+      ws.send(JSON.stringify({ type: "error", message: "Bots can only be added in the waiting room" }));
+      return;
+    }
+    const requester = game.players[ws.playerIndex];
+    if (game.ownerId && requester?.id !== game.ownerId && requester?.name !== "blackrabbit") {
+      ws.send(JSON.stringify({ type: "error", message: "Only the room creator can add bots" }));
+      return;
+    }
+    while (game.players.length < NUM_PLAYERS) {
+      const index = game.players.length;
+      game.players.push({
+        id: `bot-${crypto.randomUUID()}`,
+        name: `bot${index + 1}`,
+        team: index % 2,
+        seatIndex: index,
+        hand: [],
+        tricksWon: 0,
+        connected: true,
+        isBot: true,
+        isAway: false,
+      });
+    }
+    game.message = "All seats are filled. Ready to start!";
+    await this.setState(game);
+    await this.broadcast(game);
+  }
+
+  async handleSetBot(ws, game, data) {
+    const requester = game?.players?.[ws.playerIndex];
+    if (!requester || requester.name !== "blackrabbit") {
+      ws.send(JSON.stringify({ type: "error", message: "Only blackrabbit can manage bot seats" }));
+      return;
+    }
+    const index = Number(data.playerIndex);
+    const player = game.players[index];
+    if (!player) return;
+    if (!data.isBot && player.id.startsWith("bot-") && game.phase === "waiting") {
+      game.players.splice(index, 1);
+      const shiftedSessions = new Map();
+      for (const [sessionIndex, socket] of this.sessions) {
+        const nextIndex = sessionIndex > index ? sessionIndex - 1 : sessionIndex;
+        socket.playerIndex = nextIndex;
+        shiftedSessions.set(nextIndex, socket);
+      }
+      this.sessions = shiftedSessions;
+      game.players.forEach((remaining, remainingIndex) => {
+        remaining.seatIndex = remainingIndex;
+        remaining.team = remainingIndex % 2;
+      });
+      game.message = `${player.name} was removed. An open seat is available.`;
+      await this.setState(game);
+      await this.broadcast(game);
+      return;
+    }
+    player.isBot = Boolean(data.isBot);
+    if (player.isBot) player.isAway = false;
+    player.connected = player.isBot || this.sessions.has(index);
+    game.message = `${player.name} is now ${player.isBot ? "a bot" : "human-controlled"}.`;
+    await this.setState(game);
+    await this.broadcast(game);
+  }
+
+  async handleSetAway(ws, game, data) {
+    const player = game?.players?.[ws.playerIndex];
+    if (!player || player.isBot) return;
+    player.isAway = Boolean(data.isAway);
+    game.message = player.isAway
+      ? `${player.name} is away — a bot will play for them.`
+      : `${player.name} is back and has resumed control.`;
+    await this.setState(game);
+    await this.broadcast(game);
+  }
+
   async handleReconnect(ws, game) {
     if (!game) return;
     const idx = game.players.findIndex((p) => p.id === ws.playerId);
     if (idx >= 0) {
+      game.players[idx].name = ws.playerName;
       game.players[idx].connected = true;
       this.sessions.set(idx, ws);
       ws.playerIndex = idx;
@@ -408,6 +642,7 @@ export class GameRoom {
     game.tricks = [];
     game.bid = 0;
     game.bidSuit = null;
+    game.isChakri = false;
     game.highestBidder = -1;
     game.bidPasses = 0;
     game.biddersDone = 0;
@@ -439,7 +674,7 @@ export class GameRoom {
     // Bidding starts from the player after the dealer
     game.currentTurn = (game.dealer + 1) % NUM_PLAYERS;
     game.phase = "bidding";
-    game.message = `Bidding phase — ${game.players[game.currentTurn].name}, place your bid (5–8) with a trump suit, or pass.`;
+    game.message = `Bidding phase — ${game.players[game.currentTurn].name}, place your bid (4–8 hands) with a trump suit, or pass.`;
 
     await this.setState(game);
     await this.broadcast(game);
@@ -462,34 +697,33 @@ export class GameRoom {
       game.bids.push({ playerIndex: ws.playerIndex, bid: "pass" });
     } else {
       const n = parseInt(bid, 10);
-      if (isNaN(n) || n < 5 || n > TOTAL_TRICKS) {
+      if (isNaN(n) || n < 4 || n > TOTAL_TRICKS) {
         ws.send(
           JSON.stringify({
             type: "error",
-            message: `Bid must be between 5 and ${TOTAL_TRICKS}`,
-          })
-        );
-        return;
-      }
-      if (n <= game.bid) {
-        ws.send(
-          JSON.stringify({
-            type: "error",
-            message: `Must bid higher than current bid (${game.bid})`,
+            message: `Bid must be between 4 and ${TOTAL_TRICKS} hands`,
           })
         );
         return;
       }
       const suit = data.suit;
-      if (!SUITS.includes(suit)) {
+      if (!BID_SUIT_ORDER.includes(suit)) {
         ws.send(JSON.stringify({ type: "error", message: "Must choose a trump suit with your bid" }));
+        return;
+      }
+      const higherNumber = n > game.bid;
+      const higherSuit = n === game.bid && BID_SUIT_ORDER.indexOf(suit) > BID_SUIT_ORDER.indexOf(game.bidSuit);
+      if (!higherNumber && !higherSuit) {
+        const current = game.bid === TOTAL_TRICKS ? `Chakri ${game.bidSuit}` : `${game.bid} ${game.bidSuit || ""}`;
+        ws.send(JSON.stringify({ type: "error", message: `Must bid higher than current bid (${current})` }));
         return;
       }
       game.bid = n;
       game.bidSuit = suit;
+      game.isChakri = n === TOTAL_TRICKS;
       game.highestBidder = ws.playerIndex;
       game.biddersDone++;
-      game.bids.push({ playerIndex: ws.playerIndex, bid: n, suit });
+      game.bids.push({ playerIndex: ws.playerIndex, bid: n, suit, chakri: n === TOTAL_TRICKS });
     }
 
     // Check if bidding is complete
@@ -510,7 +744,9 @@ export class GameRoom {
       game.phase = "playing";
       game.trickLeader = game.trumpCaller;
       game.currentTurn = game.trumpCaller;
-      game.message = `${game.players[game.highestBidder].name} won the bid with ${game.bid} tricks. Trump is ${game.trumpSuit}! ${game.players[game.trumpCaller].name} leads.`;
+      game.message = game.isChakri
+        ? `${game.players[game.highestBidder].name} called CHAKRI with ${game.trumpSuit} and must win every hand! ${game.players[game.trumpCaller].name} leads.`
+        : `${game.players[game.highestBidder].name} won the bid with ${game.bid} hands. Trump is ${game.trumpSuit}! ${game.players[game.trumpCaller].name} leads.`;
       await this.setState(game);
       await this.broadcast(game);
       return;
@@ -587,43 +823,39 @@ export class GameRoom {
       return;
     }
 
-    game.message = `Trick ${trickNum} won by ${game.players[winnerIdx].name}. ${game.players[winnerIdx].name} leads next.`;
+    game.message = `Hand ${trickNum} won by ${game.players[winnerIdx].name}. ${game.players[winnerIdx].name} leads next.`;
     await this.setState(game);
     await this.broadcast(game);
   }
 
   async endHand(game) {
-    const trumpTeam = game.players[game.trumpCaller].team;
-    const otherTeam = trumpTeam === 0 ? 1 : 0;
-    const trumpTeamTricks = game.teamTricks[trumpTeam];
-    const otherTeamTricks = game.teamTricks[otherTeam];
+    const biddingTeam = game.players[game.trumpCaller].team;
+    const otherTeam = biddingTeam === 0 ? 1 : 0;
+    const biddingTeamTricks = game.teamTricks[biddingTeam];
+    const madeBid = biddingTeamTricks >= game.bid;
+    const scoringTeam = madeBid ? biddingTeam : otherTeam;
+    // A failed bid pays double, including a failed Chakri.
+    const points = madeBid ? game.bid : game.bid * 2;
 
-    let result;
-    if (trumpTeamTricks >= game.bid) {
-      // Trump-caller's team made the bid
-      result = "trump_team_wins";
-      game.scores[trumpTeam]++;
-      game.lastWinner = trumpTeam;
-      // Baunie: all tricks
-      if (trumpTeamTricks === TOTAL_TRICKS) {
-        game.scores[trumpTeam] += 2; // bonus
-        result = "baunie";
-      }
-    } else {
-      // Trump-caller's team failed the bid
-      result = "trump_team_loses";
-      game.scores[otherTeam]++;
-      game.lastWinner = otherTeam;
-    }
+    game.scores[scoringTeam] += points;
+    game.lastWinner = scoringTeam;
 
-    game.phase = "scoring";
-    game.message = `Hand ${game.handNumber} complete! ${
-      result === "baunie"
-        ? `${game.players[game.trumpCaller].name}'s team won all tricks — BAUNIE!`
-        : result === "trump_team_wins"
-        ? `${game.players[game.trumpCaller].name}'s team made the bid (${trumpTeamTricks}/${game.bid}).`
-        : `${game.players[game.trumpCaller].name}'s team failed the bid (${trumpTeamTricks}/${game.bid}). Opponents win!`
-    } Scores: Team A ${game.scores[0]} — Team B ${game.scores[1]}`;
+    const spreadA = game.scores[0] - game.scores[1];
+    const spreadB = -spreadA;
+    // Making Chakri wins immediately; otherwise a +27 spread wins the match.
+    const matchWinner = madeBid && game.isChakri
+      ? biddingTeam
+      : spreadA >= MATCH_SPREAD ? 0 : spreadB >= MATCH_SPREAD ? 1 : -1;
+    game.matchWinner = matchWinner;
+    game.phase = matchWinner >= 0 ? "game_over" : "scoring";
+
+    const bidLabel = game.isChakri ? "Chakri" : `bid of ${game.bid}`;
+    const resultMessage = madeBid
+      ? `${game.players[game.trumpCaller].name}'s team made the ${bidLabel} (${biddingTeamTricks}/${game.bid}) and gains ${points} points.`
+      : `${game.players[game.trumpCaller].name}'s team failed the ${bidLabel} (${biddingTeamTricks}/${game.bid}); their opponents gain ${points} points.`;
+    game.message = matchWinner >= 0
+      ? `${resultMessage} Team ${matchWinner === 0 ? "A" : "B"} wins the match${madeBid && game.isChakri ? " by making CHAKRI" : ` with a +${Math.abs(spreadA)} spread`}!`
+      : `Round ${game.handNumber} complete! ${resultMessage} Scores: Team A ${game.scores[0]} — Team B ${game.scores[1]}.`;
 
     await this.setState(game);
     await this.broadcast(game);
@@ -635,6 +867,18 @@ export class GameRoom {
       return;
     }
     await this.startNewHand(game, false);
+  }
+
+  async handleNewMatch(ws, game) {
+    if (game.phase !== "game_over") {
+      ws.send(JSON.stringify({ type: "error", message: "Match is not over" }));
+      return;
+    }
+    game.scores = [0, 0];
+    game.handNumber = 0;
+    game.lastWinner = -1;
+    game.matchWinner = -1;
+    await this.startNewHand(game, true);
   }
 
   // --- Broadcast helpers ---
@@ -709,6 +953,19 @@ export default {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
+    }
+
+    // Account API — credentials are intentionally simple PINs for casual play.
+    if (["/api/auth/register", "/api/auth/login", "/api/auth/logout"].includes(url.pathname)) {
+      const action = url.pathname.split("/").pop();
+      const regId = env.ROOM_REGISTRY.idFromName("global");
+      return env.ROOM_REGISTRY.get(regId).fetch(new Request(`https://celld/account/${action}`, { method: "POST", body: await request.text(), headers: { "Content-Type": "application/json" } }));
+    }
+
+    if (url.pathname === "/api/auth/me") {
+      const token = request.headers.get("Authorization")?.replace(/^Bearer\s+/i, "") || "";
+      const regId = env.ROOM_REGISTRY.idFromName("global");
+      return env.ROOM_REGISTRY.get(regId).fetch(new Request(`https://celld/account/verify?token=${encodeURIComponent(token)}`));
     }
 
     // Admin: list rooms — queries the RoomRegistry DO
