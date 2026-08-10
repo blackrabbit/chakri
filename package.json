@@ -1,0 +1,11 @@
+{
+  "name": "chakri",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "cd frontend && npm run dev",
+    "build": "cd frontend && npm run build",
+    "preview": "cd frontend && npm run preview",
+    "deploy": "celld deploy . --bucket \"$CELLD_BUCKET\" --endpoint \"$S3_ENDPOINT\" --region \"$AWS_REGION\""
+  }
+}
