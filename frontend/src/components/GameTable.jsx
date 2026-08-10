@@ -26,9 +26,6 @@ export default function GameTable({ state, send }) {
             const isMe = i === yourIndex;
             return (
               <div className={`player-row ${isCurrent ? "is-current" : ""} ${isMe ? "is-me" : ""}`} key={p.id || i}>
-                <div className="player-avatar" style={{ background: p.team === 0 ? "var(--team-a)" : "var(--team-b)" }}>
-                  {p.name[0]?.toUpperCase()}
-                </div>
                 <div className="player-details">
                   <div className="player-name">{p.name} {isMe && <span className="you-tag">YOU</span>}</div>
                   <div className="player-meta">
@@ -37,11 +34,11 @@ export default function GameTable({ state, send }) {
                   </div>
                 </div>
                 <div className="player-status">
-                  {p.isBot && <span className="you-tag">BOT</span>}
+                  {p.isBot && <span className="you-tag">DUPES</span>}
                   {p.isAway && <span className="away-tag">AWAY</span>}
                   {trumpCaller === i && <span className="dealer-tag" title="Trump caller">♛</span>}
                   <span className={`connection-dot ${p.connected || p.isBot ? "online" : "offline"}`} />
-                  {me?.name === "blackrabbit" && (!p.isBot || !p.id?.startsWith("bot-")) && <button className="player-bot-toggle" title={p.isBot ? "Return control to player" : "Let bot control this player"} onClick={() => send({ type: "set_bot", playerIndex: i, isBot: !p.isBot })}>{p.isBot ? "H" : "B"}</button>}
+                  {me?.name === "blackrabbit" && (!p.isBot || !p.id?.startsWith("bot-")) && <button className="player-bot-toggle" title={p.isBot ? "Return control to player" : "Let dupes control this player"} onClick={() => send({ type: "set_bot", playerIndex: i, isBot: !p.isBot })}>{p.isBot ? "H" : "D"}</button>}
                 </div>
               </div>
             );
@@ -109,7 +106,7 @@ export default function GameTable({ state, send }) {
             return <Card key={card.id} card={card} disabled={phase !== "playing" || !canPlay} onClick={() => send({ type: "play_card", cardId: card.id })} />;
           })}
         </div>
-        {phase === "playing" && <p className="hint">{me?.isAway ? "A bot is playing your turns until you come back" : isMyTurn ? "Choose a card to play" : `Waiting for ${players[currentTurn]?.name || "the next player"}`}</p>}
+        {phase === "playing" && <p className="hint">{me?.isAway ? "Dupes is playing your turns until you come back" : isMyTurn ? "Choose a card to play" : `Waiting for ${players[currentTurn]?.name || "the next player"}`}</p>}
       </aside>
     </div>
   );

@@ -245,7 +245,7 @@ export class GameRoom {
             }
           }
         }
-        // Bots usually make a modest bid and only rarely call Chakri.
+        // Dupes usually makes a modest bid and only rarely calls Chakri.
         const regular = options.filter((option) => option.bid < TOTAL_TRICKS);
         const shouldPass = game.bid > 0 && Math.random() < 0.4;
         const pool = regular.length && Math.random() > 0.03 ? regular.slice(0, 4) : options;
@@ -528,19 +528,19 @@ export class GameRoom {
 
   async handleAddBots(ws, game) {
     if (!game || game.phase !== "waiting") {
-      ws.send(JSON.stringify({ type: "error", message: "Bots can only be added in the waiting room" }));
+      ws.send(JSON.stringify({ type: "error", message: "Dupes can only be added in the waiting room" }));
       return;
     }
     const requester = game.players[ws.playerIndex];
     if (game.ownerId && requester?.id !== game.ownerId && requester?.name !== "blackrabbit") {
-      ws.send(JSON.stringify({ type: "error", message: "Only the room creator can add bots" }));
+      ws.send(JSON.stringify({ type: "error", message: "Only the room creator can add dupes" }));
       return;
     }
     while (game.players.length < NUM_PLAYERS) {
       const index = game.players.length;
       game.players.push({
         id: `bot-${crypto.randomUUID()}`,
-        name: `bot${index + 1}`,
+        name: `dupes${index + 1}`,
         team: index % 2,
         seatIndex: index,
         hand: [],
@@ -558,7 +558,7 @@ export class GameRoom {
   async handleSetBot(ws, game, data) {
     const requester = game?.players?.[ws.playerIndex];
     if (!requester || requester.name !== "blackrabbit") {
-      ws.send(JSON.stringify({ type: "error", message: "Only blackrabbit can manage bot seats" }));
+      ws.send(JSON.stringify({ type: "error", message: "Only blackrabbit can manage dupes seats" }));
       return;
     }
     const index = Number(data.playerIndex);
@@ -585,7 +585,7 @@ export class GameRoom {
     player.isBot = Boolean(data.isBot);
     if (player.isBot) player.isAway = false;
     player.connected = player.isBot || this.sessions.has(index);
-    game.message = `${player.name} is now ${player.isBot ? "a bot" : "human-controlled"}.`;
+    game.message = `${player.name} is now ${player.isBot ? "dupes-controlled" : "human-controlled"}.`;
     await this.setState(game);
     await this.broadcast(game);
   }
@@ -595,7 +595,7 @@ export class GameRoom {
     if (!player || player.isBot) return;
     player.isAway = Boolean(data.isAway);
     game.message = player.isAway
-      ? `${player.name} is away — a bot will play for them.`
+      ? `${player.name} is away — dupes will play for them.`
       : `${player.name} is back and has resumed control.`;
     await this.setState(game);
     await this.broadcast(game);
