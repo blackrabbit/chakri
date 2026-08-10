@@ -627,13 +627,15 @@ export default {
     if (match) {
       const roomId = match[1];
       const id = env.GAME_ROOM.idFromName(roomId);
-      // Register in RoomRegistry for admin listing
-      const regId = env.ROOM_REGISTRY.idFromName("global");
-      env.ROOM_REGISTRY.get(regId).fetch(new Request("https://celld/register", {
-        method: "POST",
-        body: JSON.stringify({ roomId }),
-        headers: { "Content-Type": "application/json" },
-      }));
+      // Register in RoomRegistry for admin listing (awaited so it can't silently fail)
+      try {
+        const regId = env.ROOM_REGISTRY.idFromName("global");
+        await env.ROOM_REGISTRY.get(regId).fetch(new Request("https://celld/register", {
+          method: "POST",
+          body: JSON.stringify({ roomId }),
+          headers: { "Content-Type": "application/json" },
+        }));
+      } catch {}
       return env.GAME_ROOM.get(id).fetch(request);
     }
 

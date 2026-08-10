@@ -4,6 +4,7 @@ export default function Admin() {
   const [rooms, setRooms] = useState([]);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState(null);
+  const [killId, setKillId] = useState("");
 
   const fetchRooms = useCallback(async () => {
     setLoading(true);
@@ -35,6 +36,13 @@ export default function Admin() {
       setMessage("Error: " + e.message);
     }
     setTimeout(() => setMessage(null), 3000);
+  }
+
+  async function killByInput() {
+    const roomId = killId.trim();
+    if (!roomId) return;
+    await killRoom(roomId);
+    setKillId("");
   }
 
   async function killAll() {
@@ -125,6 +133,48 @@ export default function Admin() {
             {message}
           </div>
         )}
+
+        {/* Kill by room ID — works even if the room isn't in the registry */}
+        <div style={{
+          background: "rgba(0,0,0,0.4)",
+          border: "1px solid rgba(255,255,255,0.1)",
+          borderRadius: "12px",
+          padding: "16px 20px",
+          marginBottom: "20px",
+          display: "flex",
+          gap: "10px",
+          alignItems: "center",
+        }}>
+          <input
+            type="text"
+            value={killId}
+            onChange={(e) => setKillId(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && killByInput()}
+            placeholder="Room ID (e.g. test)"
+            style={{
+              flex: 1,
+              padding: "10px 14px",
+              borderRadius: "8px",
+              border: "none",
+              fontSize: "0.95rem",
+              background: "rgba(255,255,255,0.95)",
+            }}
+          />
+          <button
+            onClick={killByInput}
+            style={{
+              padding: "10px 20px",
+              borderRadius: "8px",
+              border: "none",
+              fontWeight: "bold",
+              cursor: "pointer",
+              background: "#e0654a",
+              color: "white",
+            }}
+          >
+            Kill Room
+          </button>
+        </div>
 
         {rooms.length === 0 ? (
           <div style={{
