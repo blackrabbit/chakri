@@ -35,7 +35,11 @@ function useGameSocket(roomId, playerName) {
       ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
-      ws.onopen = () => setConnected(true);
+      ws.onopen = () => {
+        setConnected(true);
+        // Send join immediately so the server registers this player
+        ws.send(JSON.stringify({ type: "join" }));
+      };
       ws.onclose = () => {
         setConnected(false);
         reconnectTimer = setTimeout(connect, 2000);

@@ -44,6 +44,9 @@ export function createBots(roomId, count, onAllJoined) {
       handleBotAction(bot, state, ws);
     };
 
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ type: "join" }));
+    };
     ws.onerror = () => {};
   }
 
