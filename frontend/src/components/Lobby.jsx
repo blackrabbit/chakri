@@ -1,6 +1,9 @@
-import React from "react";
+import React, { useState, useEffect, useRef } from "react";
+import { createBots, closeBots } from "../bots.js";
 
-export default function Lobby({ state, send, yourName }) {
+export default function Lobby({ state, send, yourName, roomId }) {
+  const [bots, setBots] = useState(null);
+  const botsRef = useRef(null);
   const players = state?.players || [];
   const seats = Array.from({ length: 6 }, (_, i) => players[i] || null);
 
@@ -107,6 +110,39 @@ export default function Lobby({ state, send, yourName }) {
         >
           Start Game
         </button>
+      )}
+
+      {/* Add test bots button — only for room "test" */}
+      {roomId === "test" && players.length > 0 && players.length < 6 && !bots && (
+        <button
+          onClick={() => {
+            const needed = 6 - players.length;
+            const b = createBots(roomId, needed, () => {
+              // small delay then auto-start
+              setTimeout(() => send({ type: "start" }), 1500);
+            });
+            botsRef.current = b;
+            setBots(b);
+          }}
+          style={{
+            padding: "12px 32px",
+            borderRadius: "10px",
+            border: "2px solid var(--gold)",
+            fontSize: "1rem",
+            fontWeight: "bold",
+            cursor: "pointer",
+            background: "rgba(212,175,55,0.15)",
+            color: "var(--gold)",
+          }}
+        >
+          🤖 Add {6 - players.length} Test Bot{6 - players.length > 1 ? "s" : ""}
+        </button>
+      )}
+
+      {bots && (
+        <p style={{ color: "var(--text-dim)", fontSize: "0.85rem" }}>
+          Test bots added — they will auto-play.
+        </p>
       )}
 
       {/* Share link */}

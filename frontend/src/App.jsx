@@ -277,7 +277,7 @@ export default function App() {
 
       {/* Main game area */}
       {!state || state.phase === "waiting" ? (
-        <Lobby state={state} send={send} yourName={playerName} />
+        <Lobby state={state} send={send} yourName={playerName} roomId={roomId} />
       ) : (
         <GameTable state={state} send={send} />
       )}
