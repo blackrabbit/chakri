@@ -22,7 +22,17 @@ export function createBots(roomId, count, onAllJoined) {
     const name = `Bot ${i + 1}`;
     const pid = `bot-${uuid()}`;
     const ws = new WebSocket(`${base}?name=${encodeURIComponent(name)}&pid=${pid}`);
-    const bot = { ws, name, pid, index: null };
+    const bot = {
+      ws,
+      name,
+      pid,
+      index: null,
+      // Track the last action we took so we don't duplicate it
+      lastBidKey: null,
+      lastPlayKey: null,
+      nextHandSent: false,
+      counted: false,
+    };
     bots.push(bot);
 
     ws.onmessage = (e) => {
@@ -34,8 +44,8 @@ export function createBots(roomId, count, onAllJoined) {
       bot.index = state.yourIndex;
 
       // Track joins
-      if (state.phase === "waiting" && bot.index !== null && !bot._counted) {
-        bot._counted = true;
+      if (state.phase === "waiting" && bot.index !== null && !bot.counted) {
+        bot.counted = true;
         joinedCount++;
         if (joinedCount >= count && onAllJoined) onAllJoined();
       }
@@ -58,10 +68,13 @@ function handleBotAction(bot, state, ws) {
   const myIndex = state.yourIndex;
   if (myIndex === null || myIndex === undefined) return;
 
-  // Bidding phase: bid with a random suit or pass
+  // --- Bidding phase ---
   if (state.phase === "bidding" && state.currentTurn === myIndex) {
-    if (bot._bid) return;
-    bot._bid = true;
+    // Use a key that includes hand number + turn so we only act once per turn
+    const bidKey = `${state.handNumber}-${state.biddersDone}`;
+    if (bot.lastBidKey === bidKey) return; // already acted this turn
+    bot.lastBidKey = bidKey;
+
     setTimeout(() => {
       if (ws.readyState !== 1) return;
       // 70% chance to pass, 30% chance to bid (so a human usually wins)
@@ -82,18 +95,16 @@ function handleBotAction(bot, state, ws) {
     return;
   }
 
-  // Reset bid flag when out of bidding
-  if (state.phase !== "bidding") {
-    bot._bid = false;
-  }
-
-  // Playing phase: play a random valid card
+  // --- Playing phase ---
   if (state.phase === "playing" && state.currentTurn === myIndex) {
-    if (bot._played) return;
-    bot._played = true;
-
     const me = state.players[myIndex];
     if (!me || !me.hand || me.hand.length === 0) return;
+
+    // Use a key that includes hand number + trick number + cards in trick
+    // so we act once per trick-turn, and reset when a new trick starts
+    const playKey = `${state.handNumber}-${state.tricks.length}-${state.currentTrick.length}`;
+    if (bot.lastPlayKey === playKey) return; // already acted for this trick slot
+    bot.lastPlayKey = playKey;
 
     // Determine valid cards (must follow suit if possible)
     let validCards = me.hand;
@@ -105,6 +116,8 @@ function handleBotAction(bot, state, ws) {
       }
     }
 
+    if (validCards.length === 0) return;
+
     const card = validCards[Math.floor(Math.random() * validCards.length)];
     setTimeout(() => {
       if (ws.readyState === 1) {
@@ -114,26 +127,26 @@ function handleBotAction(bot, state, ws) {
     return;
   }
 
-  // Reset played flag when it's no longer our turn
-  if (state.phase === "playing" && state.currentTurn !== myIndex) {
-    bot._played = false;
-  }
-
-  // Scoring phase: auto-advance after a delay
+  // --- Scoring phase: auto-advance ---
   if (state.phase === "scoring") {
-    if (bot._nextHand) return;
-    bot._nextHand = true;
+    // Only one bot needs to send next_hand, but all can try —
+    // the server only accepts it in scoring phase.
+    // Use hand number to ensure we only send once per scoring round.
+    const scoreKey = `${state.handNumber}`;
+    if (bot.nextHandSent === scoreKey) return;
+    bot.nextHandSent = scoreKey;
+
     setTimeout(() => {
       if (ws.readyState === 1) {
         ws.send(JSON.stringify({ type: "next_hand" }));
       }
-      bot._nextHand = false;
     }, 2000 + Math.random() * 2000);
     return;
   }
 
+  // Reset scoring tracker when not in scoring phase
   if (state.phase !== "scoring") {
-    bot._nextHand = false;
+    bot.nextHandSent = false;
   }
 }
 
