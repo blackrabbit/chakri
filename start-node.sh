@@ -7,7 +7,7 @@ set -e
 export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:?Set AWS_ACCESS_KEY_ID}"
 export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:?Set AWS_SECRET_ACCESS_KEY}"
 export AWS_REGION="${AWS_REGION:-us-east-1}"
-export S3_ENDPOINT="${S3_ENDPOINT:-https://chakri.us-east-1.linodeobjects.com}"
+export S3_ENDPOINT="${S3_ENDPOINT:-https://us-east-1.linodeobjects.com}"
 export CELLD_BUCKET="${CELLD_BUCKET:-s3://chakri}"
 
 VPS_IP="45.33.66.69"
