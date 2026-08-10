@@ -7,8 +7,8 @@ set -e
 # (Set these in /root/chakri/.env or export before running)
 export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:?Set AWS_ACCESS_KEY_ID}"
 export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:?Set AWS_SECRET_ACCESS_KEY}"
-export AWS_REGION="${AWS_REGION:-us-east-1}"
-export S3_ENDPOINT="${S3_ENDPOINT:-https://us-east-1.linodeobjects.com}"
+export AWS_REGION="${AWS_REGION:-auto}"
+export S3_ENDPOINT="${S3_ENDPOINT:-https://2b65defb0a39652c594e511acfe07089.r2.cloudflarestorage.com}"
 export CELLD_BUCKET="${CELLD_BUCKET:-s3://chakri}"
 
 cd /root/chakri

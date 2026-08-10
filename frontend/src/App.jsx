@@ -2,6 +2,16 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import Lobby from "./components/Lobby.jsx";
 import GameTable from "./components/GameTable.jsx";
 
+// polyfill for crypto.randomUUID() which is only available in secure contexts (HTTPS)
+function uuid() {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = (crypto.getRandomValues(new Uint8Array(1))[0] ?? Math.random() * 256) & 0xf;
+    const v = c === "x" ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
 // ---------------------------------------------------------------------------
 // WebSocket game client hook
 // ---------------------------------------------------------------------------
@@ -9,7 +19,7 @@ function useGameSocket(roomId, playerName) {
   const [state, setState] = useState(null);
   const [connected, setConnected] = useState(false);
   const wsRef = useRef(null);
-  const playerIdRef = useRef(localStorage.getItem("chakri-pid") || crypto.randomUUID());
+  const playerIdRef = useRef(localStorage.getItem("chakri-pid") || uuid());
   localStorage.setItem("chakri-pid", playerIdRef.current);
 
   useEffect(() => {
@@ -80,7 +90,7 @@ export default function App() {
   function createRoom() {
     if (!playerName.trim()) return;
     localStorage.setItem("chakri-name", playerName);
-    const id = crypto.randomUUID().slice(0, 8);
+    const id = uuid().slice(0, 8);
     setRoomId(id);
     setScreen("game");
   }
