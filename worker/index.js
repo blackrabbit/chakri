@@ -278,9 +278,11 @@ export class GameRoom {
     game.teamTricks = [0, 0];
     game.tricks = [];
     game.bid = 0;
+    game.bidSuit = null;
     game.highestBidder = -1;
     game.bidPasses = 0;
     game.biddersDone = 0;
+    game.bids = []; // [{ playerIndex, bid, suit | "pass" }]
 
     // Deal cards
     for (let i = 0; i < NUM_PLAYERS; i++) {
@@ -308,7 +310,7 @@ export class GameRoom {
     // Bidding starts from the player after the dealer
     game.currentTurn = (game.dealer + 1) % NUM_PLAYERS;
     game.phase = "bidding";
-    game.message = `Bidding phase — ${game.players[game.currentTurn].name}, place your bid (5–8) or pass.`;
+    game.message = `Bidding phase — ${game.players[game.currentTurn].name}, place your bid (5–8) with a trump suit, or pass.`;
 
     await this.setState(game);
     await this.broadcast(game);
@@ -328,6 +330,7 @@ export class GameRoom {
     if (bid === "pass") {
       game.bidPasses++;
       game.biddersDone++;
+      game.bids.push({ playerIndex: ws.playerIndex, bid: "pass" });
     } else {
       const n = parseInt(bid, 10);
       if (isNaN(n) || n < 5 || n > TOTAL_TRICKS) {
@@ -348,9 +351,16 @@ export class GameRoom {
         );
         return;
       }
+      const suit = data.suit;
+      if (!SUITS.includes(suit)) {
+        ws.send(JSON.stringify({ type: "error", message: "Must choose a trump suit with your bid" }));
+        return;
+      }
       game.bid = n;
+      game.bidSuit = suit;
       game.highestBidder = ws.playerIndex;
       game.biddersDone++;
+      game.bids.push({ playerIndex: ws.playerIndex, bid: n, suit });
     }
 
     // Check if bidding is complete
@@ -365,11 +375,13 @@ export class GameRoom {
         await this.startNewHand(game, false);
         return;
       }
-      // Bidding complete
+      // Bidding complete — trump is the suit chosen by the highest bidder
       game.trumpCaller = game.highestBidder;
-      game.currentTurn = game.highestBidder;
-      game.phase = "trump_selection";
-      game.message = `${game.players[game.highestBidder].name} won the bid with ${game.bid} tricks. Choose the trump suit!`;
+      game.trumpSuit = game.bidSuit;
+      game.phase = "playing";
+      game.trickLeader = game.trumpCaller;
+      game.currentTurn = game.trumpCaller;
+      game.message = `${game.players[game.highestBidder].name} won the bid with ${game.bid} tricks. Trump is ${game.trumpSuit}! ${game.players[game.trumpCaller].name} leads.`;
       await this.setState(game);
       await this.broadcast(game);
       return;
@@ -377,37 +389,7 @@ export class GameRoom {
 
     // Next bidder
     game.currentTurn = (game.currentTurn + 1) % NUM_PLAYERS;
-    // Skip players who have passed
-    while (game.bidPasses >= NUM_PLAYERS - 1 && false) {
-      game.currentTurn = (game.currentTurn + 1) % NUM_PLAYERS;
-    }
-    game.message = `${game.players[game.currentTurn].name}, your bid (current: ${game.bid}, or pass)`;
-    await this.setState(game);
-    await this.broadcast(game);
-  }
-
-  async handleChooseTrump(ws, game, data) {
-    if (game.phase !== "trump_selection") {
-      ws.send(JSON.stringify({ type: "error", message: "Not in trump selection phase" }));
-      return;
-    }
-    if (ws.playerIndex !== game.trumpCaller) {
-      ws.send(JSON.stringify({ type: "error", message: "Only the trump-caller chooses trump" }));
-      return;
-    }
-
-    const suit = data.suit;
-    if (!SUITS.includes(suit)) {
-      ws.send(JSON.stringify({ type: "error", message: "Invalid suit" }));
-      return;
-    }
-
-    game.trumpSuit = suit;
-    game.phase = "playing";
-    game.trickLeader = game.trumpCaller;
-    game.currentTurn = game.trumpCaller;
-    game.message = `Trump is ${suit}! ${game.players[game.trumpCaller].name} leads the first trick.`;
-
+    game.message = `${game.players[game.currentTurn].name}, your bid (current: ${game.bid} ${game.bidSuit ? "of " + game.bidSuit : ""}, or pass)`;
     await this.setState(game);
     await this.broadcast(game);
   }

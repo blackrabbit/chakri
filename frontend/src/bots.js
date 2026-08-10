@@ -58,13 +58,25 @@ function handleBotAction(bot, state, ws) {
   const myIndex = state.yourIndex;
   if (myIndex === null || myIndex === undefined) return;
 
-  // Bidding phase: pass
+  // Bidding phase: bid with a random suit or pass
   if (state.phase === "bidding" && state.currentTurn === myIndex) {
     if (bot._bid) return;
     bot._bid = true;
     setTimeout(() => {
-      if (ws.readyState === 1) {
+      if (ws.readyState !== 1) return;
+      // 70% chance to pass, 30% chance to bid (so a human usually wins)
+      if (Math.random() < 0.7) {
         ws.send(JSON.stringify({ type: "bid", bid: "pass" }));
+      } else {
+        const minBid = Math.max(5, (state.bid || 0) + 1);
+        const maxBid = 8;
+        if (minBid > maxBid) {
+          ws.send(JSON.stringify({ type: "bid", bid: "pass" }));
+        } else {
+          const bidNum = Math.floor(Math.random() * (maxBid - minBid + 1)) + minBid;
+          const suit = SUITS[Math.floor(Math.random() * SUITS.length)];
+          ws.send(JSON.stringify({ type: "bid", bid: bidNum, suit }));
+        }
       }
     }, 500 + Math.random() * 1000);
     return;
@@ -73,23 +85,6 @@ function handleBotAction(bot, state, ws) {
   // Reset bid flag when out of bidding
   if (state.phase !== "bidding") {
     bot._bid = false;
-  }
-
-  // Trump selection: pick random suit
-  if (state.phase === "trump_selection" && state.trumpCaller === myIndex) {
-    if (bot._trump) return;
-    bot._trump = true;
-    const suit = SUITS[Math.floor(Math.random() * SUITS.length)];
-    setTimeout(() => {
-      if (ws.readyState === 1) {
-        ws.send(JSON.stringify({ type: "choose_trump", suit }));
-      }
-    }, 800 + Math.random() * 1200);
-    return;
-  }
-
-  if (state.phase !== "trump_selection") {
-    bot._trump = false;
   }
 
   // Playing phase: play a random valid card

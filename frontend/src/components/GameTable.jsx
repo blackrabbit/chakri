@@ -1,7 +1,6 @@
 import React, { useState } from "react";
 import Card from "./Card.jsx";
 import BiddingPanel from "./BiddingPanel.jsx";
-import TrumpSelector from "./TrumpSelector.jsx";
 
 const SUIT_SYMBOLS = {
   hearts: "♥",
@@ -240,11 +239,6 @@ export default function GameTable({ state, send }) {
         <BiddingPanel state={state} send={send} isMyTurn={isMyTurn} />
       )}
 
-      {/* Trump selection */}
-      {phase === "trump_selection" && (
-        <TrumpSelector state={state} send={send} isMyTurn={isMyTurn} />
-      )}
-
       {/* Scoring overlay */}
       {phase === "scoring" && (
         <div
@@ -313,26 +307,6 @@ export default function GameTable({ state, send }) {
               />
             );
           })}
-        </div>
-      )}
-
-      {/* My hand during trump selection (trump caller sees their cards) */}
-      {me && phase === "trump_selection" && yourIndex === trumpCaller && (
-        <div
-          style={{
-            position: "absolute",
-            bottom: "12px",
-            left: "50%",
-            transform: "translateX(-50%)",
-            zIndex: 20,
-            display: "flex",
-            gap: "6px",
-            padding: "8px",
-          }}
-        >
-          {me.hand.map((card) => (
-            <Card key={card.id} card={card} disabled />
-          ))}
         </div>
       )}
 
