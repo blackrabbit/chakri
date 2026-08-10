@@ -65,6 +65,47 @@ function trickWinner(trick, trumpSuit) {
 }
 
 // ---------------------------------------------------------------------------
+// RoomRegistry Durable Object — tracks all room IDs for admin listing
+// ---------------------------------------------------------------------------
+export class RoomRegistry {
+  constructor(state, env) { this.state = state; this.env = env; }
+
+  async fetch(request) {
+    const url = new URL(request.url);
+
+    // Register a room
+    if (url.pathname === "/register" && request.method === "POST") {
+      const { roomId } = await request.json();
+      const rooms = (await this.state.storage.get("rooms")) || [];
+      if (!rooms.includes(roomId)) {
+        rooms.push(roomId);
+        await this.state.storage.put("rooms", rooms);
+      }
+      return new Response("ok", { status: 200 });
+    }
+
+    // List all rooms
+    if (url.pathname === "/list") {
+      const rooms = (await this.state.storage.get("rooms")) || [];
+      return new Response(JSON.stringify({ rooms }), {
+        status: 200, headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    // Unregister a room
+    if (url.pathname === "/unregister" && request.method === "POST") {
+      const { roomId } = await request.json();
+      let rooms = (await this.state.storage.get("rooms")) || [];
+      rooms = rooms.filter(r => r !== roomId);
+      await this.state.storage.put("rooms", rooms);
+      return new Response("ok", { status: 200 });
+    }
+
+    return new Response("not found", { status: 404 });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // GameRoom Durable Object
 // ---------------------------------------------------------------------------
 export class GameRoom {
@@ -89,6 +130,39 @@ export class GameRoom {
     // Health check
     if (url.pathname === "/health") {
       return new Response("ok", { status: 200 });
+    }
+
+    // Kill room: DELETE /kill — wipes storage and closes all connections
+    if (url.pathname === "/kill" || (request.method === "DELETE" && url.pathname === "/")) {
+      // Close all WebSocket sessions
+      for (const [idx, ws] of this.sessions) {
+        try {
+          ws.send(JSON.stringify({ type: "kicked", message: "Room has been deleted by admin" }));
+          ws.close(1000, "Room deleted");
+        } catch {}
+      }
+      this.sessions.clear();
+      // Wipe all storage
+      await this.state.storage.deleteAll();
+      return new Response(JSON.stringify({ killed: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    // Get room info (for admin listing)
+    if (url.pathname === "/info") {
+      const game = await this.getState();
+      return new Response(JSON.stringify({
+        exists: !!game,
+        phase: game?.phase || null,
+        players: game?.players?.map(p => ({ name: p.name, connected: p.connected, team: p.team })) || [],
+        handNumber: game?.handNumber || 0,
+        scores: game?.scores || [0, 0],
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
     }
 
     if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
@@ -553,14 +627,68 @@ export default {
     if (match) {
       const roomId = match[1];
       const id = env.GAME_ROOM.idFromName(roomId);
+      // Register in RoomRegistry for admin listing
+      const regId = env.ROOM_REGISTRY.idFromName("global");
+      env.ROOM_REGISTRY.get(regId).fetch(new Request("https://celld/register", {
+        method: "POST",
+        body: JSON.stringify({ roomId }),
+        headers: { "Content-Type": "application/json" },
+      }));
       return env.GAME_ROOM.get(id).fetch(request);
     }
 
     // Create a new room
     if (url.pathname === "/api/create-room") {
       const roomId = crypto.randomUUID().slice(0, 8);
+      // Register in the RoomRegistry
+      const regId = env.ROOM_REGISTRY.idFromName("global");
+      await env.ROOM_REGISTRY.get(regId).fetch(new Request("https://celld/register", {
+        method: "POST",
+        body: JSON.stringify({ roomId }),
+        headers: { "Content-Type": "application/json" },
+      }));
       return new Response(JSON.stringify({ roomId }), {
         status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    // Admin: list rooms — queries the RoomRegistry DO
+    if (url.pathname === "/api/admin/rooms") {
+      const regId = env.ROOM_REGISTRY.idFromName("global");
+      const regResp = await env.ROOM_REGISTRY.get(regId).fetch(new Request("https://celld/list"));
+      const regData = await regResp.json();
+      const rooms = [];
+      for (const roomId of (regData.rooms || [])) {
+        try {
+          const id = env.GAME_ROOM.idFromName(roomId);
+          const infoResp = await env.GAME_ROOM.get(id).fetch(new Request("https://celld/info"));
+          const info = await infoResp.json();
+          if (info.exists) {
+            rooms.push({ id: roomId, ...info });
+          }
+        } catch {}
+      }
+      return new Response(JSON.stringify({ rooms }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    // Admin: kill a room
+    const killMatch = url.pathname.match(/^\/api\/admin\/kill\/([\w-]+)$/);
+    if (killMatch) {
+      const roomId = killMatch[1];
+      const id = env.GAME_ROOM.idFromName(roomId);
+      const resp = await env.GAME_ROOM.get(id).fetch(new Request("https://celld/kill", { method: "DELETE" }));
+      // Also unregister from registry
+      const regId = env.ROOM_REGISTRY.idFromName("global");
+      await env.ROOM_REGISTRY.get(regId).fetch(new Request("https://celld/unregister", {
+        method: "POST", body: JSON.stringify({ roomId }),
+        headers: { "Content-Type": "application/json" },
+      }));
+      return new Response(resp.body, {
+        status: resp.status,
         headers: { "Content-Type": "application/json" },
       });
     }

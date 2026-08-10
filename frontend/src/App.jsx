@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import Lobby from "./components/Lobby.jsx";
 import GameTable from "./components/GameTable.jsx";
+import Admin from "./components/Admin.jsx";
 
 // polyfill for crypto.randomUUID() which is only available in secure contexts (HTTPS)
 function uuid() {
@@ -80,7 +81,10 @@ function useGameSocket(roomId, playerName) {
 // Main App
 // ---------------------------------------------------------------------------
 export default function App() {
-  const [screen, setScreen] = useState("home"); // home | game
+  const [screen, setScreen] = useState(() => {
+    if (window.location.pathname === "/admin") return "admin";
+    return "home";
+  });
   const [roomId, setRoomId] = useState("");
   const [playerName, setPlayerName] = useState(
     localStorage.getItem("chakri-name") || ""
@@ -208,6 +212,10 @@ export default function App() {
         </div>
       </div>
     );
+  }
+
+  if (screen === "admin") {
+    return <Admin />;
   }
 
   return (

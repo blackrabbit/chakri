@@ -3,9 +3,15 @@
   "main": "worker/index.js",
   "compatibility_date": "2026-01-01",
   "durable_objects": {
-    "bindings": [{ "name": "GAME_ROOM", "class_name": "GameRoom" }]
+    "bindings": [
+      { "name": "GAME_ROOM", "class_name": "GameRoom" },
+      { "name": "ROOM_REGISTRY", "class_name": "RoomRegistry" }
+    ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["GameRoom"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["GameRoom"] },
+    { "tag": "v2", "new_sqlite_classes": ["RoomRegistry"] }
+  ],
   "assets": {
     "directory": "frontend/dist",
     "html_handling": "auto-trailing-slash",
