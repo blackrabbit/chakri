@@ -64,6 +64,19 @@ function trickWinner(trick, trumpSuit) {
   return best.playerIndex;
 }
 
+// Pick a random valid card for auto-play (must follow suit if possible)
+function randomValidCard(hand, currentTrick) {
+  if (!hand || hand.length === 0) return null;
+  let valid = hand;
+  if (currentTrick && currentTrick.length > 0) {
+    const ledSuit = currentTrick[0].card.suit;
+    const hasLed = hand.some((c) => c.suit === ledSuit);
+    if (hasLed) valid = hand.filter((c) => c.suit === ledSuit);
+  }
+  if (valid.length === 0) return null;
+  return valid[Math.floor(Math.random() * valid.length)];
+}
+
 // ---------------------------------------------------------------------------
 // RoomRegistry Durable Object — tracks all room IDs for admin listing
 // ---------------------------------------------------------------------------
@@ -121,6 +134,47 @@ export class GameRoom {
   }
   async setState(game) {
     await this.state.storage.put("game", game);
+  }
+
+  // If it's a disconnected player's turn, schedule an alarm to auto-play
+  // so the game never stalls on a dropped connection.
+  async scheduleAutoPlay(game) {
+    if (!game) return;
+    if (game.phase !== "bidding" && game.phase !== "playing") return;
+    const current = game.currentTurn;
+    if (current < 0 || current >= game.players.length) return;
+    const player = game.players[current];
+    if (player && player.connected) return; // connected — human/bot will act
+    // Disconnected — auto-act in ~4s
+    await this.state.storage.setAlarm(Date.now() + 4000);
+  }
+
+  // Fires when a disconnected player's turn needs an automatic action.
+  async alarm() {
+    const game = await this.getState();
+    if (!game) return;
+    const current = game.currentTurn;
+    if (current < 0 || current >= game.players.length) return;
+    const player = game.players[current];
+    if (!player || player.connected) return; // they came back — leave them alone
+
+    const fakeWs = { playerIndex: current, send: () => {} };
+
+    if (game.phase === "bidding") {
+      // Auto-pass for disconnected bidder
+      await this.handleBid(fakeWs, game, { bid: "pass" });
+    } else if (game.phase === "playing") {
+      const card = randomValidCard(player.hand, game.currentTrick);
+      if (card) {
+        await this.handlePlayCard(fakeWs, game, { cardId: card.id });
+      } else if (player.hand && player.hand.length === 0) {
+        // No cards left — skip turn (shouldn't happen, but be safe)
+        game.currentTurn = (current + 1) % game.players.length;
+        game.message = `${player.name} skipped (no cards). ${game.players[game.currentTurn].name}'s turn.`;
+        await this.setState(game);
+        await this.broadcast(game);
+      }
+    }
   }
 
   // --- WebSocket lifecycle ---
@@ -235,6 +289,7 @@ export class GameRoom {
     }
     await this.setState(game);
     await this.broadcast(game);
+    await this.scheduleAutoPlay(game);
   }
 
   // --- Action handlers ---
@@ -597,6 +652,7 @@ export class GameRoom {
         ws.send(JSON.stringify({ type: "state", state: this.sanitize(game, idx) }));
       }
     }
+    await this.scheduleAutoPlay(game);
   }
 
   // Hide other players' hands

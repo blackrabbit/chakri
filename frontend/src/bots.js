@@ -21,9 +21,8 @@ export function createBots(roomId, count, onAllJoined) {
   for (let i = 0; i < count; i++) {
     const name = `Bot ${i + 1}`;
     const pid = `bot-${uuid()}`;
-    const ws = new WebSocket(`${base}?name=${encodeURIComponent(name)}&pid=${pid}`);
     const bot = {
-      ws,
+      ws: null,
       name,
       pid,
       index: null,
@@ -32,8 +31,18 @@ export function createBots(roomId, count, onAllJoined) {
       lastPlayKey: null,
       nextHandSent: false,
       counted: false,
+      url: `${base}?name=${encodeURIComponent(name)}&pid=${pid}`,
     };
     bots.push(bot);
+    connectBot(bot);
+  }
+
+  return bots;
+
+  function connectBot(bot) {
+    const ws = new WebSocket(bot.url);
+    bot.ws = ws;
+    let reconnectTimer;
 
     ws.onmessage = (e) => {
       const msg = JSON.parse(e.data);
@@ -58,9 +67,12 @@ export function createBots(roomId, count, onAllJoined) {
       ws.send(JSON.stringify({ type: "join" }));
     };
     ws.onerror = () => {};
+    ws.onclose = () => {
+      // Reconnect so bots survive node restarts / network blips
+      clearTimeout(reconnectTimer);
+      reconnectTimer = setTimeout(() => connectBot(bot), 2000);
+    };
   }
-
-  return bots;
 }
 
 function handleBotAction(bot, state, ws) {
